@@ -1,0 +1,8 @@
+{
+  "name": "library-issuing-system",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node libraryLogic.test.mjs"
+  }
+}

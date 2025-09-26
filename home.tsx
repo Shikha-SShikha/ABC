@@ -1,369 +1,477 @@
-import { useState } from "react";
+import { useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import axios, { type AxiosResponse, type AxiosError } from "axios";
-import logo from "../components/ui/TNQTech Logo.svg";
+import {
+  ISSUE_DURATION_DAYS,
+  type IssueRecord,
+  issueBook,
+  returnBook,
+  sortRecordsByActivity,
+} from "./libraryLogic";
 
-interface ChatMessage {
-  id: string;
-  content: string;
-  isBot: boolean;
-  timestamp: Date;
+interface IssueFormState {
+  qrCode: string;
+  employeeId: string;
+  bookTitle: string;
+  bookImagePreview: string | null;
+  bookImageName: string;
 }
 
-interface PreviousQuestion {
-  id: string;
-  question: string;
-}
+const employees: Record<string, { name: string; designation: string }> = {
+  "EMP001": { name: "Aarav Natarajan", designation: "Senior Analyst" },
+  "EMP002": { name: "Meera Iyer", designation: "Data Scientist" },
+  "EMP003": { name: "Rahul Verma", designation: "Product Manager" },
+  "EMP004": { name: "Divya Krishnan", designation: "UX Researcher" },
+};
+
+const formatDate = (date: Date) =>
+  new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+
+const addDays = (date: Date, days: number) => {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+};
+
+const initialIssueForm: IssueFormState = {
+  qrCode: "",
+  employeeId: "",
+  bookTitle: "",
+  bookImagePreview: null,
+  bookImageName: "",
+};
 
 export default function Home() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputValue, setInputValue] = useState("");
-  const [isQueryStatsOpen, setIsQueryStatsOpen] = useState(false);
-  const [clarificationPrompt, setClarificationPrompt] = useState<string | null>(null);
-  const [clarificationNeeded, setClarificationNeeded] = useState<boolean>(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  
-  const previousQuestions: PreviousQuestion[] = [];
+  const [issueDialogOpen, setIssueDialogOpen] = useState(false);
+  const [returnDialogOpen, setReturnDialogOpen] = useState(false);
+  const [issueForm, setIssueForm] = useState<IssueFormState>(initialIssueForm);
+  const [issueRecords, setIssueRecords] = useState<IssueRecord[]>([]);
+  const [returnQrCode, setReturnQrCode] = useState("");
+  const [bannerMessage, setBannerMessage] = useState<
+    { type: "success" | "error"; message: string } | null
+  >(null);
 
-  const suggestionChips = [
-    { icon: "fas fa-search", text: "Missing values analysis", color: "blue" },
-    { icon: "fas fa-users", text: "Top users by tasks", color: "green" },
-    { icon: "fas fa-clock", text: "Average processing time", color: "yellow" },
-    { icon: "fas fa-exclamation-triangle", text: "Duplicate detection", color: "red" },
-  ];
+  const matchedEmployee = useMemo(() => {
+    const trimmedId = issueForm.employeeId.trim().toUpperCase();
+    return trimmedId ? employees[trimmedId] ?? null : null;
+  }, [issueForm.employeeId]);
 
-  const handleSendMessage = () => {
-    if (inputValue.trim()) {
-      const newMessage: ChatMessage = {
-        id: Date.now().toString(),
-        content: inputValue,
-        isBot: false,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, newMessage]);
+  const totalIssued = useMemo(
+    () => issueRecords.filter((record) => record.status === "issued").length,
+    [issueRecords],
+  );
 
-      if (clarificationNeeded && sessionId) {
-        console.log("clarificationNeeded", clarificationNeeded);
-        // Send to /clarify endpoint
-        axios.post("http://localhost:8000/clarify", {
-          session_id: sessionId,
-          clarification: inputValue,
-          query: inputValue, // if your backend expects 'query', otherwise remove
-        })
-          .then((res: AxiosResponse) => {
-            let clarifyContent = "";
-            if (res.data.result) {
-              clarifyContent = res.data.result;
-            } else if (res.data.error) {
-              clarifyContent = `Error: ${res.data.error}`;
-            } else if (res.data.clarification_prompt) {
-              clarifyContent = res.data.clarification_prompt;
-            } else {
-              clarifyContent = "No response from clarify endpoint.";
-            }
-            const clarifyBotMessage: ChatMessage = {
-              id: (Date.now() + 1).toString(),
-              content: clarifyContent,
-              isBot: true,
-              timestamp: new Date(),
-            };
-            setMessages((prev) => [...prev, clarifyBotMessage]);
-            setClarificationPrompt(res.data.clarification_prompt ?? null);
-            setClarificationNeeded(!!res.data.clarification_needed);
-            setSessionId(res.data.session_id ?? null);
-          })
-          .catch((err: AxiosError) => {
-            console.error(err);
-            const errorBotMessage: ChatMessage = {
-              id: (Date.now() + 2).toString(),
-              content: `Error: ${err.message}`,
-              isBot: true,
-              timestamp: new Date(),
-            };
-            setMessages((prev) => [...prev, errorBotMessage]);
-          });
-      } else {
-        // Send to /query endpoint
-        axios.post("http://localhost:8000/query", {
-          query: inputValue,
-        })
-          .then((res: AxiosResponse) => {
-            let queryContent = "";
-            if (res.data.clarification_prompt) {
-              queryContent = res.data.clarification_prompt;
-            } else if (res.data.result) {
-              queryContent = res.data.result;
-            } else if (res.data.error) {
-              queryContent = `Error: ${res.data.error}`;
-            } else {
-              queryContent = "No response from query endpoint.";
-            }
-            const queryBotMessage: ChatMessage = {
-              id: (Date.now() + 1).toString(),
-              content: queryContent,
-              isBot: true,
-              timestamp: new Date(),
-            };
-            setMessages((prev) => [...prev, queryBotMessage]);
+  const overdueCount = useMemo(
+    () =>
+      issueRecords.filter(
+        (record) => record.status === "issued" && record.dueDate < new Date(),
+      ).length,
+    [issueRecords],
+  );
 
-            setClarificationPrompt(res.data.clarification_prompt ?? null);
-            setClarificationNeeded(res.data.clarification_needed ?? false);
-            setSessionId(res.data.session_id ?? null);
-          })
-          .catch((err: AxiosError) => {
-            console.error(err);
-          });
-      }
-      setInputValue("");
+  const returnedToday = useMemo(() => {
+    const today = new Date();
+    return issueRecords.filter((record) => {
+      if (!record.returnDate) return false;
+      return (
+        record.returnDate.getDate() === today.getDate() &&
+        record.returnDate.getMonth() === today.getMonth() &&
+        record.returnDate.getFullYear() === today.getFullYear()
+      );
+    }).length;
+  }, [issueRecords]);
+
+  const handleIssueDialogChange = (open: boolean) => {
+    setIssueDialogOpen(open);
+    if (!open) {
+      setIssueForm(initialIssueForm);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      handleSendMessage();
+  const handleReturnDialogChange = (open: boolean) => {
+    setReturnDialogOpen(open);
+    if (!open) {
+      setReturnQrCode("");
     }
   };
 
-  const handleSuggestionClick = (text: string) => {
-    setInputValue(`Tell me about ${text.toLowerCase()}`);
+  const handleImageChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      setIssueForm((prev) => ({
+        ...prev,
+        bookImagePreview: null,
+        bookImageName: "",
+      }));
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setIssueForm((prev) => ({
+        ...prev,
+        bookImagePreview: typeof reader.result === "string" ? reader.result : null,
+        bookImageName: file.name,
+      }));
+    };
+    reader.readAsDataURL(file);
   };
 
-  const handlePreviousQuestionClick = (question: string) => {
-    setInputValue(question);
+  const handleIssueSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const outcome = issueBook(
+      issueRecords,
+      {
+        qrCode: issueForm.qrCode,
+        employeeId: issueForm.employeeId,
+        bookTitle: issueForm.bookTitle,
+        bookImage: issueForm.bookImagePreview,
+      },
+      employees,
+    );
+
+    if (outcome.kind === "error") {
+      setBannerMessage({ type: "error", message: outcome.message });
+      return;
+    }
+
+    setIssueRecords((prev) => sortRecordsByActivity([outcome.record, ...prev]));
+    setBannerMessage({ type: "success", message: outcome.message });
+    handleIssueDialogChange(false);
+  };
+
+  const handleReturnSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const outcome = returnBook(issueRecords, returnQrCode);
+
+    if (outcome.kind === "error") {
+      setBannerMessage({ type: "error", message: outcome.message });
+      return;
+    }
+
+    setIssueRecords(sortRecordsByActivity(outcome.records));
+    setBannerMessage({ type: "success", message: outcome.message });
+    handleReturnDialogChange(false);
   };
 
   return (
-    <div className="min-h-screen bg-[hsl(220,13%,96%)] font-['Source_Sans_Pro'] text-[hsl(218,16%,22%)]">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200 px-6 py-2 flex items-center justify-between">
-        <div className="flex items-center space-x-6">
-  {/* TNQTECH Logo */}
-  <div className="logo-container">
-    <img src={logo} alt="TNQTech Logo" className="logo" style={{ width: '115px', height: '75px' }} />
-  </div>
-  {/* Data Insights block right next to logo */}
-  <div className="text-left">
-    <h2 className="text-xl font-semibold text-[hsl(218,16%,22%)]">Data Insights</h2>
-    <p className="text-sm text-gray-600">Insights Before You Ask. Answers When You Do.</p>
-  </div>
-  {/* Stats and button remain to the right */}
-  <div className="flex items-center space-x-4 ml-6">
-    <div className="text-right">
-      <span className="text-sm text-gray-600">📊 763,868 records loaded</span>
-    </div>
-    <Button 
-      className="tnq-btn flex items-center space-x-2"
-      onClick={() => setIsQueryStatsOpen(true)}
-            >
-              <i className="fas fa-chart-bar"></i>
-              <span>Query Stats</span>
-            </Button>
-          </div>
+    <div className="min-h-screen bg-slate-100">
+      <header className="bg-white border-b border-slate-200 shadow-sm">
+        <div className="max-w-6xl mx-auto px-6 py-6 flex flex-col gap-2">
+          <h1 className="text-3xl font-semibold text-slate-900">Library Issuing Desk</h1>
+          <p className="text-slate-600 max-w-2xl">
+            Scan your QR code to issue or return books seamlessly. Every book is issued for
+            15 days and overdue titles are highlighted automatically.
+          </p>
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-80px)]">
-        {/* Sidebar */}
-        <div className="w-72 bg-white shadow-lg border-r border-gray-200 flex flex-col">
-          <div className="p-4 border-b border-gray-200">
-            <h3 className="font-semibold text-[hsl(218,16%,22%)] flex items-center space-x-2">
-              <i className="fas fa-history text-[hsl(228,86%,46%)]"></i>
-              <span>History</span>
-            </h3>
+      <main className="max-w-6xl mx-auto px-6 py-10 space-y-8">
+        {bannerMessage ? (
+          <div
+            className={`rounded-lg border px-4 py-3 text-sm font-medium ${
+              bannerMessage.type === "success"
+                ? "bg-green-50 border-green-200 text-green-800"
+                : "bg-red-50 border-red-200 text-red-800"
+            }`}
+          >
+            {bannerMessage.message}
           </div>
-          
-          <ScrollArea className="flex-1 p-4">
-            <div className="space-y-2">
-              {previousQuestions.length === 0 ? (
-                <div className="text-center py-8">
-                  <i className="fas fa-clock text-gray-400 text-2xl mb-2"></i>
-                  <p className="text-sm text-gray-500">No history yet</p>
-                  <p className="text-xs text-gray-400 mt-1">Your queries will appear here</p>
-                </div>
-              ) : (
-                previousQuestions.map((question) => (
-                  <div
-                    key={question.id}
-                    className="previous-question-item p-3 rounded-lg cursor-pointer"
-                    onClick={() => handlePreviousQuestionClick(question.question)}
-                  >
-                    <p className="text-sm text-[hsl(218,16%,22%)] line-clamp-2">
-                      {question.question}
-                    </p>
-                  </div>
-                ))
-              )}
-            </div>
-          </ScrollArea>
-        </div>
+        ) : null}
 
-        {/* Main Chat Interface */}
-        <div className="flex-1 flex flex-col">
-          {/* Chat Messages Area */}
-          <ScrollArea className="flex-1 p-6 bg-white">
-            <div className="max-w-4xl mx-auto space-y-6">
-              {/* AI Welcome Message */}
-              <div className="flex items-start space-x-4">
-                <div className="w-10 h-10 bg-[hsl(228,86%,46%)] rounded-full flex items-center justify-center text-white font-semibold">
-                  <i className="fas fa-robot"></i>
-                </div>
-                <div className="flex-1 chat-message-bot rounded-2xl rounded-tl-sm p-6">
-                  <p className="text-[hsl(218,16%,22%)] leading-relaxed">
-                    Hello! I'm your data assistant.
-                  </p>
-                  
-                  <div className="mt-4">
-                    <p className="text-sm text-[hsl(228,86%,46%)] font-semibold mb-3">Try asking me:</p>
-                    
-                    {/* Suggestion Chips */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {suggestionChips.map((chip, index) => (
-                        <button
-                          key={index}
-                          className="suggestion-chip rounded-full px-4 py-3 text-left flex items-center space-x-3 group"
-                          onClick={() => handleSuggestionClick(chip.text)}
-                        >
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                            chip.color === 'blue' ? 'bg-blue-100 text-blue-600' :
-                            chip.color === 'green' ? 'bg-green-100 text-green-600' :
-                            chip.color === 'yellow' ? 'bg-yellow-100 text-yellow-600' :
-                            'bg-red-100 text-red-600'
-                          }`}>
-                            <i className={chip.icon}></i>
-                          </div>
-                          <span className="text-sm font-medium text-[hsl(218,16%,22%)]">
-                            {chip.text}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Chat Messages */}
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex items-start space-x-4 ${
-                    message.isBot ? "" : "flex-row-reverse space-x-reverse"
-                  }`}
-                >
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${
-                    message.isBot 
-                      ? "bg-[hsl(228,86%,46%)] text-white"
-                      : "bg-gray-300 text-gray-700"
-                  }`}>
-                    <i className={message.isBot ? "fas fa-robot" : "fas fa-user"}></i>
-                  </div>
-                  <div className={`flex-1 rounded-2xl p-4 max-w-[70%] ${
-                    message.isBot 
-                      ? "chat-message-bot rounded-tl-sm"
-                      : "bg-[hsl(228,86%,46%)] text-white rounded-tr-sm"
-                  }`}>
-                    <p className="leading-relaxed">{message.content}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </ScrollArea>
-
-          {/* Chat Input */}
-          <div className="border-t border-gray-200 bg-white p-6">
-            <div className="max-w-4xl mx-auto">
-              <div className="flex items-center space-x-4">
-                <div className="flex-1 relative">
-                  <Input
-                    type="text"
-                    placeholder="Ask me anything about your data..."
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    className="w-full px-6 py-4 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[hsl(228,86%,46%)] focus:border-transparent text-[hsl(218,16%,22%)] placeholder-gray-500"
-                  />
-                </div>
-                <Button
-                  onClick={handleSendMessage}
-                  className="tnq-btn p-4 rounded-full"
-                >
-                  <i className="fas fa-paper-plane"></i>
-                </Button>
-              </div>
-              
-              <div className="mt-2 text-center">
-                <p className="text-xs text-gray-500">
-                  AI may make mistakes. Consider checking important information.
+        <section className="grid gap-6 md:grid-cols-2">
+          <Card className="border-slate-200 shadow-sm">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-900">Issue a Book</h2>
+                <p className="text-sm text-slate-600">
+                  Start by scanning the shelf QR code. Confirm the employee's details and capture the
+                  book cover to complete the issuing process.
                 </p>
               </div>
-            </div>
-          </div>
-        </div>
-      </div>
+              <Button
+                className="w-full bg-blue-600 hover:bg-blue-700"
+                onClick={() => setIssueDialogOpen(true)}
+              >
+                Scan QR to Issue
+              </Button>
+              <ul className="text-xs text-slate-500 space-y-1">
+                <li>• Employee name and designation appear automatically from their ID.</li>
+                <li>• The return due date is always 15 days from the issue date.</li>
+              </ul>
+            </CardContent>
+          </Card>
 
-      {/* Query Stats Modal */}
-      <Dialog open={isQueryStatsOpen} onOpenChange={setIsQueryStatsOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden">
+          <Card className="border-slate-200 shadow-sm">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-900">Return a Book</h2>
+                <p className="text-sm text-slate-600">
+                  Scan the same QR code when the book is brought back. The system instantly marks it
+                  as returned.
+                </p>
+              </div>
+              <Button
+                className="w-full bg-emerald-600 hover:bg-emerald-700"
+                onClick={() => setReturnDialogOpen(true)}
+              >
+                Scan QR to Return
+              </Button>
+              <p className="text-xs text-slate-500">
+                Overdue books (beyond 15 days) are flagged in the dashboard below for quick action.
+              </p>
+            </CardContent>
+          </Card>
+        </section>
+
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Card className="border-slate-200">
+            <CardContent className="p-5">
+              <p className="text-sm text-slate-500">Active Issues</p>
+              <p className="mt-2 text-3xl font-semibold text-slate-900">{totalIssued}</p>
+              <p className="text-xs text-slate-500 mt-1">Books currently with employees</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200">
+            <CardContent className="p-5">
+              <p className="text-sm text-slate-500">Overdue</p>
+              <p className="mt-2 text-3xl font-semibold text-red-600">{overdueCount}</p>
+              <p className="text-xs text-slate-500 mt-1">Need follow-up</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200">
+            <CardContent className="p-5">
+              <p className="text-sm text-slate-500">Returned Today</p>
+              <p className="mt-2 text-3xl font-semibold text-emerald-600">{returnedToday}</p>
+              <p className="text-xs text-slate-500 mt-1">Books checked back in</p>
+            </CardContent>
+          </Card>
+        </section>
+
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold text-slate-900">Book Activity</h2>
+            <span className="text-xs text-slate-500">Newest entries appear first</span>
+          </div>
+          <Card className="border-slate-200 shadow-sm">
+            <CardContent className="p-0">
+              <ScrollArea className="max-h-[420px]">
+                <div className="divide-y divide-slate-200">
+                  {issueRecords.length === 0 ? (
+                    <div className="p-8 text-center text-sm text-slate-500">
+                      No book activity recorded yet. Use the buttons above to issue or return a book.
+                    </div>
+                  ) : (
+                    issueRecords.map((record) => {
+                      const isOverdue =
+                        record.status === "issued" && record.dueDate < new Date();
+
+                      return (
+                        <div key={record.id} className="flex flex-col gap-4 p-6 md:flex-row md:items-center md:justify-between">
+                          <div className="flex items-start gap-4">
+                            {record.bookImage ? (
+                              <img
+                                src={record.bookImage}
+                                alt={`${record.bookTitle} cover`}
+                                className="h-20 w-16 rounded-md object-cover border border-slate-200"
+                              />
+                            ) : (
+                              <div className="h-20 w-16 rounded-md border border-dashed border-slate-300 bg-slate-50" />
+                            )}
+                            <div>
+                              <h3 className="text-lg font-semibold text-slate-900">{record.bookTitle}</h3>
+                              <p className="text-sm text-slate-600">
+                                {record.employeeName} · {record.designation}
+                              </p>
+                              <div className="mt-2 space-y-1 text-xs text-slate-500">
+                                <p>Issued: {formatDate(record.issueDate)}</p>
+                                <p>
+                                  Due: <span className={isOverdue ? "text-red-600 font-semibold" : ""}>{formatDate(record.dueDate)}</span>
+                                </p>
+                                {record.returnDate ? (
+                                  <p>Returned: {formatDate(record.returnDate)}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-start gap-2 md:items-end">
+                            <span
+                              className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${
+                                record.status === "issued"
+                                  ? "bg-blue-100 text-blue-700"
+                                  : "bg-emerald-100 text-emerald-700"
+                              }`}
+                            >
+                              {record.status === "issued" ? "Issued" : "Returned"}
+                            </span>
+                            {isOverdue ? (
+                              <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
+                                Overdue
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+        </section>
+      </main>
+
+      <Dialog open={issueDialogOpen} onOpenChange={handleIssueDialogChange}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <div className="tnq-gradient text-white p-6 -mx-6 -mt-6 mb-6">
-              <DialogTitle className="text-xl font-bold text-white">Query Statistics</DialogTitle>
-              <p className="text-blue-100">Detailed analytics for your data queries</p>
-            </div>
+            <DialogTitle>Scan QR to Issue</DialogTitle>
           </DialogHeader>
-          
-          <ScrollArea className="max-h-96">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-              <Card className="bg-blue-50">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-600">Total Queries</p>
-                      <p className="text-2xl font-bold text-[hsl(228,86%,46%)]">1,247</p>
-                    </div>
-                    <i className="fas fa-search text-[hsl(228,86%,46%)] text-xl"></i>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-green-50">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-600">Avg Response Time</p>
-                      <p className="text-2xl font-bold text-green-600">2.4s</p>
-                    </div>
-                    <i className="fas fa-stopwatch text-green-600 text-xl"></i>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-purple-50">
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-gray-600">Success Rate</p>
-                      <p className="text-2xl font-bold text-purple-600">94.2%</p>
-                    </div>
-                    <i className="fas fa-check-circle text-purple-600 text-xl"></i>
-                  </div>
-                </CardContent>
-              </Card>
+          <form onSubmit={handleIssueSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700" htmlFor="qr-code">
+                Book QR Code
+              </label>
+              <Input
+                id="qr-code"
+                placeholder="Auto-filled after scanning"
+                value={issueForm.qrCode}
+                onChange={(event) =>
+                  setIssueForm((prev) => ({ ...prev, qrCode: event.target.value }))
+                }
+              />
             </div>
-            
-            <div className="space-y-4">
-              <h3 className="font-semibold text-[hsl(218,16%,22%)]">Recent Query Performance</h3>
-              <Card className="bg-gray-50">
-                <CardContent className="p-4">
-                  <p className="text-sm text-gray-600">
-                    Query performance data and analytics would be displayed here with charts and detailed metrics.
-                  </p>
-                </CardContent>
-              </Card>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700" htmlFor="employee-id">
+                Employee ID
+              </label>
+              <Input
+                id="employee-id"
+                placeholder="e.g. EMP001"
+                value={issueForm.employeeId}
+                onChange={(event) =>
+                  setIssueForm((prev) => ({ ...prev, employeeId: event.target.value }))
+                }
+              />
+              <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-600">
+                {matchedEmployee ? (
+                  <div>
+                    <p className="font-semibold text-slate-900">{matchedEmployee.name}</p>
+                    <p>{matchedEmployee.designation}</p>
+                  </div>
+                ) : issueForm.employeeId.trim() ? (
+                  <p className="text-red-600">No employee found for this ID.</p>
+                ) : (
+                  <p>Enter an employee ID to fetch the name and designation automatically.</p>
+                )}
+              </div>
             </div>
-          </ScrollArea>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700" htmlFor="book-title">
+                Book Title
+              </label>
+              <Input
+                id="book-title"
+                placeholder="e.g. Clean Code"
+                value={issueForm.bookTitle}
+                onChange={(event) =>
+                  setIssueForm((prev) => ({ ...prev, bookTitle: event.target.value }))
+                }
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700" htmlFor="book-image">
+                Capture Book Cover
+              </label>
+              <Input id="book-image" type="file" accept="image/*" onChange={handleImageChange} />
+              {issueForm.bookImagePreview ? (
+                <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <img
+                    src={issueForm.bookImagePreview}
+                    alt="Book preview"
+                    className="h-16 w-12 rounded object-cover"
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-slate-700">Preview ready</p>
+                    <p className="text-xs text-slate-500 truncate">{issueForm.bookImageName}</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">Upload a clear picture of the book for verification.</p>
+              )}
+            </div>
+
+            <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-700">
+              This book will be due on <strong>{formatDate(addDays(new Date(), ISSUE_DURATION_DAYS))}</strong>.
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-slate-300 text-slate-700"
+                onClick={() => handleIssueDialogChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" className="bg-blue-600 hover:bg-blue-700">
+                Issue Book
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={returnDialogOpen} onOpenChange={handleReturnDialogChange}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Scan QR to Return</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleReturnSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700" htmlFor="return-qr-code">
+                Book QR Code
+              </label>
+              <Input
+                id="return-qr-code"
+                placeholder="Auto-filled after scanning"
+                value={returnQrCode}
+                onChange={(event) => setReturnQrCode(event.target.value)}
+              />
+            </div>
+            <p className="text-xs text-slate-500">
+              Use the same QR code that was used during issuing. The system will automatically match
+              the record and mark the book as returned.
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="border-slate-300 text-slate-700"
+                onClick={() => handleReturnDialogChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700">
+                Mark as Returned
+              </Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </div>
